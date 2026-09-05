@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Pet-Saúde Conecta Onco</title>
+  <desc id="desc">Símbolo de cuidado e conexão com um coração central.</desc>
+  <rect width="512" height="512" rx="112" fill="#0B7773"/>
+  <circle cx="256" cy="256" r="156" fill="#E8F4F1" opacity=".16"/>
+  <path d="M256 365c-10-10-91-78-91-139 0-35 25-61 58-61 19 0 35 9 47 25 12-16 28-25 47-25 33 0 58 26 58 61 0 61-81 129-91 139l-14 12z" fill="#fff"/>
+  <circle cx="124" cy="151" r="22" fill="#F1A45B"/>
+  <circle cx="388" cy="151" r="22" fill="#F1A45B"/>
+  <circle cx="124" cy="361" r="22" fill="#9DD9CD"/>
+  <circle cx="388" cy="361" r="22" fill="#9DD9CD"/>
+  <path d="M144 162l47 45M368 162l-47 45M144 350l47-45M368 350l-47-45" stroke="#E8F4F1" stroke-width="12" stroke-linecap="round"/>
+</svg>
