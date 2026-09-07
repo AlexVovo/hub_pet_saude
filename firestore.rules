@@ -1,0 +1,20 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /agenda_events/{eventId} {
+      allow read: if true;
+      allow create, update, delete: if isAgendaEditor();
+    }
+  }
+
+  function isAgendaEditor() {
+    return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'a.avila.bioinfo@ici.ong',
+          'carineblatt@ufcspa.edu.br',
+          'isabel.siqueira@ufcspa.edu.br',
+        ];
+  }
+}

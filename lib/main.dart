@@ -1,10 +1,25 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'firebase_options.dart';
 
 const driveRoot =
     'https://drive.google.com/drive/folders/1f5g51F-XQrpLIUj7WFDQE8n7WguwCzgb';
 
-void main() => runApp(const PetSaudeApp());
+const agendaEditorEmails = {
+  'a.avila.bioinfo@ici.ong',
+  'carineblatt@ufcspa.edu.br',
+  'isabel.siqueira@ufcspa.edu.br',
+};
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  runApp(const PetSaudeApp());
+}
 
 class PetSaudeApp extends StatelessWidget {
   const PetSaudeApp({super.key});
@@ -486,6 +501,11 @@ class _HubHomePageState extends State<HubHomePage> {
                     SliverToBoxAdapter(
                       child: _Header(
                         onOpenDrive: () => openDrive(driveRoot),
+                        onOpenAgenda: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const AgendaPage(),
+                          ),
+                        ),
                         isWide: isWide,
                       ),
                     ),
@@ -682,8 +702,13 @@ class _NavItem extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onOpenDrive, required this.isWide});
+  const _Header({
+    required this.onOpenDrive,
+    required this.onOpenAgenda,
+    required this.isWide,
+  });
   final VoidCallback onOpenDrive;
+  final VoidCallback onOpenAgenda;
   final bool isWide;
 
   @override
@@ -694,6 +719,14 @@ class _Header extends StatelessWidget {
         children: [
           if (!isWide) const _BrandMark(),
           if (!isWide) const Spacer(),
+          IconButton(
+            tooltip: 'Abrir agenda',
+            onPressed: onOpenAgenda,
+            icon: const Icon(Icons.calendar_month_outlined, size: 20),
+            style: IconButton.styleFrom(
+              foregroundColor: const Color(0xFF0B7773),
+            ),
+          ),
           IconButton(
             tooltip: 'Abrir pasta no Google Drive',
             onPressed: onOpenDrive,
@@ -972,4 +1005,668 @@ class _FolderCard extends StatelessWidget {
       ),
     );
   }
+}
+
+enum AgendaEventType { evento, reuniao, congresso }
+
+class AgendaEvent {
+  const AgendaEvent({
+    required this.id,
+    required this.title,
+    required this.type,
+    required this.date,
+    required this.time,
+    required this.location,
+    this.notes = '',
+  });
+
+  final String id;
+  final String title;
+  final AgendaEventType type;
+  final DateTime date;
+  final String time;
+  final String location;
+  final String notes;
+
+  factory AgendaEvent.fromFirestore(
+    DocumentSnapshot<Map<String, dynamic>> document,
+  ) {
+    final data = document.data()!;
+    return AgendaEvent(
+      id: document.id,
+      title: data['title'] as String? ?? '',
+      type: agendaEventTypeFromValue(data['type'] as String? ?? ''),
+      date: (data['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      time: data['time'] as String? ?? '',
+      location: data['location'] as String? ?? '',
+      notes: data['notes'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> toFirestore() => {
+    'title': title,
+    'type': type.name,
+    'date': Timestamp.fromDate(date),
+    'time': time,
+    'location': location,
+    'notes': notes,
+  };
+}
+
+class AgendaPage extends StatefulWidget {
+  const AgendaPage({super.key});
+
+  @override
+  State<AgendaPage> createState() => _AgendaPageState();
+}
+
+class _AgendaPageState extends State<AgendaPage> {
+  AgendaEventType? selectedType;
+  final _eventsCollection = FirebaseFirestore.instance.collection(
+    'agenda_events',
+  );
+
+  bool get canManageAgenda {
+    final email = FirebaseAuth.instance.currentUser?.email?.toLowerCase();
+    return email != null && agendaEditorEmails.contains(email);
+  }
+
+  Future<void> signIn() async {
+    try {
+      await FirebaseAuth.instance.signInWithPopup(GoogleAuthProvider());
+      if (mounted) setState(() {});
+    } on FirebaseAuthException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Não foi possível entrar com o Google.')),
+      );
+    }
+  }
+
+  Future<void> signOut() async {
+    await FirebaseAuth.instance.signOut();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> addEvent(AgendaEvent event) async {
+    if (!canManageAgenda) return;
+    try {
+      await _eventsCollection.add(event.toFirestore());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Evento adicionado à agenda.')),
+      );
+    } on FirebaseException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Não foi possível salvar o compromisso.')),
+      );
+    }
+  }
+
+  Future<void> openEventForm() async {
+    if (!canManageAgenda) return;
+    final event = await showDialog<AgendaEvent>(
+      context: context,
+      builder: (context) => const _AgendaEventForm(),
+    );
+    if (event != null && mounted) await addEvent(event);
+  }
+
+  Future<void> editEvent(AgendaEvent event) async {
+    if (!canManageAgenda) return;
+    final updatedEvent = await showDialog<AgendaEvent>(
+      context: context,
+      builder: (context) => _AgendaEventForm(event: event),
+    );
+    if (updatedEvent == null || !mounted) return;
+
+    try {
+      await _eventsCollection.doc(event.id).update(updatedEvent.toFirestore());
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Compromisso atualizado.')));
+    } on FirebaseException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Não foi possível atualizar o compromisso.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> deleteEvent(AgendaEvent event) async {
+    if (!canManageAgenda) return;
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Excluir compromisso?'),
+        content: Text('Deseja excluir "${event.title}" da agenda?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+    if (shouldDelete != true || !mounted) return;
+
+    try {
+      await _eventsCollection.doc(event.id).delete();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Compromisso excluído.')));
+    } on FirebaseException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Não foi possível excluir o compromisso.'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF6F8FB),
+      appBar: AppBar(
+        title: const Text(
+          'Agenda',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF17323B),
+        elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: FirebaseAuth.instance.currentUser == null
+                ? 'Entrar com Google'
+                : 'Sair da conta',
+            onPressed: FirebaseAuth.instance.currentUser == null
+                ? signIn
+                : signOut,
+            icon: Icon(
+              FirebaseAuth.instance.currentUser == null
+                  ? Icons.login_rounded
+                  : Icons.logout_rounded,
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: canManageAgenda ? openEventForm : null,
+        backgroundColor: const Color(0xFF0B7773),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Adicionar'),
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final horizontalPadding = constraints.maxWidth >= 900 ? 42.0 : 20.0;
+          return ListView(
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              28,
+              horizontalPadding,
+              100,
+            ),
+            children: [
+              const Text(
+                'Próximos compromissos',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF17323B),
+                ),
+              ),
+              const SizedBox(height: 7),
+              const Text(
+                'Organize eventos, reuniões e congressos do Conecta Onco.',
+                style: TextStyle(color: Color(0xFF718091), fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              Builder(
+                builder: (context) {
+                  final user = FirebaseAuth.instance.currentUser;
+                  if (user == null) {
+                    return const Text(
+                      'Entre com uma conta autorizada para editar a agenda.',
+                      style: TextStyle(color: Color(0xFF718091), fontSize: 12),
+                    );
+                  }
+                  return Text(
+                    canManageAgenda
+                        ? '${user.email} — acesso de edição'
+                        : '${user.email} — acesso somente leitura',
+                    style: const TextStyle(
+                      color: Color(0xFF718091),
+                      fontSize: 12,
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 22),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _AgendaFilter(
+                      label: 'Todos',
+                      selected: selectedType == null,
+                      onTap: () => setState(() => selectedType = null),
+                    ),
+                    ...AgendaEventType.values.map(
+                      (type) => _AgendaFilter(
+                        label: eventTypeLabel(type),
+                        selected: selectedType == type,
+                        onTap: () => setState(() => selectedType = type),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _eventsCollection.snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return const Padding(
+                      padding: EdgeInsets.only(top: 40),
+                      child: Center(
+                        child: Text('Não foi possível carregar a agenda.'),
+                      ),
+                    );
+                  }
+                  if (!snapshot.hasData) {
+                    return const Padding(
+                      padding: EdgeInsets.only(top: 40),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+
+                  final events =
+                      snapshot.data!.docs
+                          .map(AgendaEvent.fromFirestore)
+                          .where(
+                            (event) =>
+                                selectedType == null ||
+                                event.type == selectedType,
+                          )
+                          .toList()
+                        ..sort(
+                          (first, second) => first.date.compareTo(second.date),
+                        );
+
+                  if (events.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.only(top: 40),
+                      child: Center(
+                        child: Text('Nenhum compromisso neste filtro.'),
+                      ),
+                    );
+                  }
+
+                  return Column(
+                    children: events
+                        .map(
+                          (event) => _AgendaEventCard(
+                            event: event,
+                            onEdit: canManageAgenda
+                                ? () => editEvent(event)
+                                : null,
+                            onDelete: canManageAgenda
+                                ? () => deleteEvent(event)
+                                : null,
+                          ),
+                        )
+                        .toList(),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _AgendaFilter extends StatelessWidget {
+  const _AgendaFilter({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        selectedColor: const Color(0xFF0B7773),
+        backgroundColor: Colors.white,
+        side: BorderSide.none,
+        labelStyle: TextStyle(
+          color: selected ? Colors.white : const Color(0xFF536170),
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        ),
+        showCheckmark: false,
+      ),
+    );
+  }
+}
+
+class _AgendaEventCard extends StatelessWidget {
+  const _AgendaEventCard({
+    required this.event,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final AgendaEvent event;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = eventTypeColor(event.type);
+    return Card(
+      color: Colors.white,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(17),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 58,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: color.withAlpha(22),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    monthName(event.date.month),
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    '${event.date.day}',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 23,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    event.title,
+                    style: const TextStyle(
+                      color: Color(0xFF17323B),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    '${eventTypeLabel(event.type)}  •  ${event.time}  •  ${event.location}',
+                    style: const TextStyle(
+                      color: Color(0xFF718091),
+                      fontSize: 12,
+                    ),
+                  ),
+                  if (event.notes.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      event.notes,
+                      style: const TextStyle(
+                        color: Color(0xFF536170),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (onEdit != null || onDelete != null) const SizedBox(width: 4),
+            if (onEdit != null)
+              IconButton(
+                tooltip: 'Editar compromisso',
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_outlined),
+                color: const Color(0xFF0B7773),
+              ),
+            if (onDelete != null)
+              IconButton(
+                tooltip: 'Excluir compromisso',
+                onPressed: onDelete,
+                icon: const Icon(Icons.delete_outline_rounded),
+                color: Colors.red.shade600,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AgendaEventForm extends StatefulWidget {
+  const _AgendaEventForm({this.event});
+
+  final AgendaEvent? event;
+
+  @override
+  State<_AgendaEventForm> createState() => _AgendaEventFormState();
+}
+
+class _AgendaEventFormState extends State<_AgendaEventForm> {
+  late final TextEditingController titleController;
+  late final TextEditingController timeController;
+  late final TextEditingController locationController;
+  late final TextEditingController notesController;
+  late AgendaEventType type;
+  late DateTime date;
+
+  bool get isEditing => widget.event != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final event = widget.event;
+    titleController = TextEditingController(text: event?.title ?? '');
+    timeController = TextEditingController(text: event?.time ?? '09:00');
+    locationController = TextEditingController(text: event?.location ?? '');
+    notesController = TextEditingController(text: event?.notes ?? '');
+    type = event?.type ?? AgendaEventType.evento;
+    date = event?.date ?? DateTime.now().add(const Duration(days: 7));
+  }
+
+  @override
+  void dispose() {
+    titleController.dispose();
+    timeController.dispose();
+    locationController.dispose();
+    notesController.dispose();
+    super.dispose();
+  }
+
+  Future<void> selectDate() async {
+    final result = await showDatePicker(
+      context: context,
+      initialDate: date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (result != null) setState(() => date = result);
+  }
+
+  void submit() {
+    if (titleController.text.trim().isEmpty) return;
+    Navigator.of(context).pop(
+      AgendaEvent(
+        id: '',
+        title: titleController.text.trim(),
+        type: type,
+        date: date,
+        time: timeController.text.trim(),
+        location: locationController.text.trim().isEmpty
+            ? 'Local a definir'
+            : locationController.text.trim(),
+        notes: notesController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(isEditing ? 'Editar compromisso' : 'Novo compromisso'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Título *'),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<AgendaEventType>(
+              initialValue: type,
+              decoration: const InputDecoration(labelText: 'Tipo'),
+              items: AgendaEventType.values
+                  .map(
+                    (value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(eventTypeLabel(value)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => type = value);
+              },
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_outlined),
+              title: const Text('Data'),
+              subtitle: Text(formatDate(date)),
+              onTap: selectDate,
+            ),
+            TextField(
+              controller: timeController,
+              decoration: const InputDecoration(
+                labelText: 'Horário',
+                prefixIcon: Icon(Icons.schedule_outlined),
+              ),
+            ),
+            TextField(
+              controller: locationController,
+              decoration: const InputDecoration(
+                labelText: 'Local ou link',
+                prefixIcon: Icon(Icons.place_outlined),
+              ),
+            ),
+            TextField(
+              controller: notesController,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: 'Observações'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: submit,
+          child: Text(isEditing ? 'Salvar' : 'Adicionar'),
+        ),
+      ],
+    );
+  }
+}
+
+String eventTypeLabel(AgendaEventType type) {
+  switch (type) {
+    case AgendaEventType.evento:
+      return 'Evento';
+    case AgendaEventType.reuniao:
+      return 'Reunião';
+    case AgendaEventType.congresso:
+      return 'Congresso';
+  }
+}
+
+AgendaEventType agendaEventTypeFromValue(String value) {
+  return AgendaEventType.values.firstWhere(
+    (type) => type.name == value,
+    orElse: () => AgendaEventType.evento,
+  );
+}
+
+Color eventTypeColor(AgendaEventType type) {
+  switch (type) {
+    case AgendaEventType.evento:
+      return const Color(0xFF0B7773);
+    case AgendaEventType.reuniao:
+      return const Color(0xFF4D669B);
+    case AgendaEventType.congresso:
+      return const Color(0xFFB65C31);
+  }
+}
+
+String monthName(int month) {
+  const names = [
+    'JAN',
+    'FEV',
+    'MAR',
+    'ABR',
+    'MAI',
+    'JUN',
+    'JUL',
+    'AGO',
+    'SET',
+    'OUT',
+    'NOV',
+    'DEZ',
+  ];
+  return names[month - 1];
+}
+
+String formatDate(DateTime date) {
+  final day = date.day.toString().padLeft(2, '0');
+  final month = date.month.toString().padLeft(2, '0');
+  return '$day/$month/${date.year}';
 }
