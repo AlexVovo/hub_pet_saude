@@ -10,7 +10,7 @@ const driveRoot =
     'https://drive.google.com/drive/folders/1f5g51F-XQrpLIUj7WFDQE8n7WguwCzgb';
 
 const agendaEditorEmails = {
-  'a.avila.bioinfo@ici.ong',
+  'projetobioinfo@ici.ong', // ADM do sistema
   'carineblatt@ufcspa.edu.br',
   'isabel.siqueira@ufcspa.edu.br',
 };
