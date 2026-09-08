@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'firebase_options.dart';
@@ -1405,9 +1406,38 @@ class _AgendaEventCard extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
 
+  Uri? get eventLink {
+    final uri = Uri.tryParse(event.location.trim());
+    if (uri == null ||
+        !uri.hasScheme ||
+        (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+    return uri;
+  }
+
+  Future<void> openLink(BuildContext context, Uri link) async {
+    if (!await launchUrl(link, mode: LaunchMode.externalApplication) &&
+        context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Não foi possível abrir o link.')),
+      );
+    }
+  }
+
+  Future<void> copyLink(BuildContext context, Uri link) async {
+    await Clipboard.setData(ClipboardData(text: link.toString()));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Link copiado.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final color = eventTypeColor(event.type);
+    final link = eventLink;
     return Card(
       color: Colors.white,
       margin: const EdgeInsets.only(bottom: 12),
@@ -1473,6 +1503,33 @@ class _AgendaEventCard extends StatelessWidget {
                         color: Color(0xFF536170),
                         fontSize: 12,
                       ),
+                    ),
+                  ],
+                  if (link != null) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => openLink(context, link),
+                          icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                          label: const Text('Abrir link'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF0B7773),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => copyLink(context, link),
+                          icon: const Icon(Icons.copy_outlined, size: 17),
+                          label: const Text('Copiar link'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF0B7773),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ],
