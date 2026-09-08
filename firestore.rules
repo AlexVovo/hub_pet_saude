@@ -13,6 +13,7 @@ service cloud.firestore {
         && request.auth.token.email_verified == true
         && request.auth.token.email in [
           'a.avila.bioinfo@ici.ong',
+          'projetobioinfo@ici.ong',
           'carineblatt@ufcspa.edu.br',
           'isabel.siqueira@ufcspa.edu.br',
         ];

@@ -10,7 +10,8 @@ const driveRoot =
     'https://drive.google.com/drive/folders/1f5g51F-XQrpLIUj7WFDQE8n7WguwCzgb';
 
 const agendaEditorEmails = {
-  'projetobioinfo@ici.ong', // ADM do sistema
+  'a.avila.bioinfo@ici.ong', // ADM do sistema
+  //'projetobioinfo@ici.ong',
   'carineblatt@ufcspa.edu.br',
   'isabel.siqueira@ufcspa.edu.br',
 };
@@ -1096,12 +1097,33 @@ class _AgendaPageState extends State<AgendaPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Evento adicionado à agenda.')),
       );
-    } on FirebaseException catch (_) {
+    } on FirebaseException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Não foi possível salvar o compromisso.')),
+        SnackBar(
+          content: Text(
+            'Não foi possível salvar o compromisso (${error.code}).',
+          ),
+        ),
       );
     }
+  }
+
+  Future<void> handleAddPressed() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      await signIn();
+      return;
+    }
+    if (!canManageAgenda) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Esta conta não tem permissão para editar a agenda.'),
+        ),
+      );
+      return;
+    }
+    await openEventForm();
   }
 
   Future<void> openEventForm() async {
@@ -1203,7 +1225,7 @@ class _AgendaPageState extends State<AgendaPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: canManageAgenda ? openEventForm : null,
+        onPressed: handleAddPressed,
         backgroundColor: const Color(0xFF0B7773),
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add_rounded),
