@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'datasus_oncology_service.dart';
 import 'firebase_options.dart';
 
 const driveRoot =
@@ -513,6 +514,9 @@ class _HubHomePageState extends State<HubHomePage> {
                     ),
                     SliverToBoxAdapter(child: _WelcomeSection(isWide: isWide)),
                     SliverToBoxAdapter(
+                      child: OncologyDashboardSection(isWide: isWide),
+                    ),
+                    SliverToBoxAdapter(
                       child: _Toolbar(
                         selectedCategory: selectedCategory,
                         onCategoryChanged: (value) =>
@@ -822,6 +826,789 @@ class _WelcomeSection extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class OncologyCostData {
+  const OncologyCostData({
+    required this.year,
+    required this.region,
+    required this.tumorType,
+    required this.totalCost,
+    required this.siaCost,
+    required this.sihCost,
+    required this.monthlyTrend,
+    required this.monthlyValues,
+  });
+
+  final int year;
+  final String region;
+  final String tumorType;
+  final double totalCost;
+  final double siaCost;
+  final double sihCost;
+  final List<double> monthlyTrend;
+  final List<double> monthlyValues;
+
+  String get totalCostLabel => _formatCurrency(totalCost);
+  String get siaCostLabel => _formatCurrency(siaCost);
+  String get sihCostLabel => _formatCurrency(sihCost);
+
+  static String _formatCurrency(double value) {
+    if (value >= 1e9) {
+      return 'R\$ ${(value / 1e9).toStringAsFixed(2)}B';
+    }
+    if (value >= 1e6) {
+      return 'R\$ ${(value / 1e6).toStringAsFixed(2)}M';
+    }
+    return 'R\$ ${value.toStringAsFixed(0)}';
+  }
+}
+
+class OncologyDashboardSection extends StatefulWidget {
+  const OncologyDashboardSection({super.key, required this.isWide});
+
+  final bool isWide;
+
+  @override
+  State<OncologyDashboardSection> createState() =>
+      _OncologyDashboardSectionState();
+}
+
+class _OncologyDashboardSectionState extends State<OncologyDashboardSection> {
+  static const years = OncologyDataService.supportedYears;
+  static const regions = [
+    'Brasil',
+    'Norte',
+    'Nordeste',
+    'Centro-Oeste',
+    'Sudeste',
+    'Sul',
+  ];
+  static const months = <int, String>{
+    0: 'Ano inteiro',
+    1: 'Janeiro',
+    2: 'Fevereiro',
+    3: 'Março',
+    4: 'Abril',
+    5: 'Maio',
+    6: 'Junho',
+    7: 'Julho',
+    8: 'Agosto',
+    9: 'Setembro',
+    10: 'Outubro',
+    11: 'Novembro',
+    12: 'Dezembro',
+  };
+  static const tumorTypes = [
+    'Oncologia geral',
+    'Câncer de mama',
+    'Câncer de colo',
+    'Câncer de pulmão',
+  ];
+
+  List<DatSusOncologyRecord> _records = const [];
+  DatSusSummaryMetadata _metadata = const DatSusSummaryMetadata(
+    status: 'partial',
+    pendingFiles: 0,
+  );
+
+  int selectedYear = years.last;
+  int selectedMonth = 0;
+  String selectedRegion = 'Brasil';
+  String selectedTumor = 'Oncologia geral';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecords();
+  }
+
+  Future<void> _loadRecords() async {
+    final records = await OncologyDataService.loadDashboardData();
+    final metadata = await OncologyDataService.loadSummaryMetadata();
+    if (!mounted) return;
+    final availableYears = records
+        .map((record) => record.year)
+        .where(years.contains)
+        .toList();
+    setState(() {
+      _records = records;
+      _metadata = metadata;
+      if (availableYears.isNotEmpty) {
+        selectedYear = availableYears.reduce((a, b) => a > b ? a : b);
+      }
+    });
+  }
+
+  List<DatSusOncologyRecord> get yearlyRecords {
+    return _records.where((record) {
+      final matchesYear = record.year == selectedYear;
+      final matchesRegion = selectedRegion == 'Brasil'
+          ? record.region == selectedRegion || record.region == 'Brasil'
+          : record.region == selectedRegion;
+      final matchesTumor = record.tumorType == selectedTumor;
+      return matchesYear && matchesRegion && matchesTumor;
+    }).toList();
+  }
+
+  List<DatSusOncologyRecord> get filteredRecords => yearlyRecords
+      .where((record) => selectedMonth == 0 || record.month == selectedMonth)
+      .toList();
+
+  List<double> get monthlyTrend {
+    final totals = List<double>.filled(12, 0);
+    for (final record in yearlyRecords) {
+      if (record.month >= 1 && record.month <= 12) {
+        totals[record.month - 1] += record.cost;
+      }
+    }
+    final maximum = totals.fold<double>(
+      0,
+      (current, value) => value > current ? value : current,
+    );
+    if (maximum == 0) return List<double>.filled(12, 0);
+    return totals.map((value) => value / maximum).toList();
+  }
+
+  OncologyCostData get selectedData {
+    final monthlyValues = List<double>.filled(12, 0);
+    for (final record in yearlyRecords) {
+      if (record.month >= 1 && record.month <= 12) {
+        monthlyValues[record.month - 1] += record.cost;
+      }
+    }
+
+    if (filteredRecords.isEmpty) {
+      return OncologyCostData(
+        year: selectedYear,
+        region: selectedRegion,
+        tumorType: selectedTumor,
+        totalCost: 0,
+        siaCost: 0,
+        sihCost: 0,
+        monthlyTrend: monthlyTrend,
+        monthlyValues: monthlyValues,
+      );
+    }
+
+    final siaCost = filteredRecords
+        .where((record) => record.system == 'SIA')
+        .fold<double>(0, (total, record) => total + record.cost);
+    final sihCost = filteredRecords
+        .where((record) => record.system == 'SIH')
+        .fold<double>(0, (total, record) => total + record.cost);
+
+    final totalCost = siaCost + sihCost;
+
+    return OncologyCostData(
+      year: selectedYear,
+      region: selectedRegion,
+      tumorType: selectedTumor,
+      totalCost: totalCost,
+      siaCost: siaCost,
+      sihCost: sihCost,
+      monthlyTrend: monthlyTrend,
+      monthlyValues: monthlyValues,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = selectedData;
+    final hasData = filteredRecords.isNotEmpty;
+    final metricCards = [
+      _MetricCard(
+        title: selectedTumor == 'Oncologia geral'
+            ? 'Custo total em oncologia geral'
+            : 'Custo total em $selectedTumor',
+        value: data.totalCostLabel,
+        subtitle: 'soma dos valores aprovados no SIA e registrados nas AIH',
+        color: const Color(0xFF0B7773),
+      ),
+      _MetricCard(
+        title: 'Custos SIA',
+        value: data.siaCostLabel,
+        subtitle: 'valor aprovado da produção ambulatorial (PA_VALAPR)',
+        color: const Color(0xFF4D669B),
+      ),
+      _MetricCard(
+        title: 'Custos SIH',
+        value: data.sihCostLabel,
+        subtitle: 'valor total registrado nas AIH (VAL_TOT)',
+        color: const Color(0xFFB65C31),
+      ),
+    ];
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        widget.isWide ? 42 : 20,
+        8,
+        widget.isWide ? 42 : 20,
+        18,
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFE5EAF0)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Oncologia geral | custos SIA/SIH',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF17323B),
+                        ),
+                      ),
+                      const SizedBox(height: 7),
+                      Text(
+                        'Panorama dos custos de oncologia geral em atenção ambulatorial e hospitalar, com base em dados públicos do DATASUS.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: const Color(0xFF718091),
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8F4F1),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'Fonte: ftp.datasus.gov.br/dissemin/publicos/',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0B7773),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            if (!_metadata.isComplete) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7E8),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFF2D7A1)),
+                ),
+                child: Text(
+                  'Base em atualização: ${_metadata.pendingFiles} arquivos oficiais ainda aguardam processamento. Totais nacionais podem estar incompletos.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF805B16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            Wrap(
+              spacing: 12,
+              runSpacing: 10,
+              children: [
+                _DashboardFilter<int>(
+                  label: 'Ano',
+                  value: selectedYear,
+                  items: years,
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => selectedYear = value);
+                    }
+                  },
+                ),
+                _DashboardFilter<int>(
+                  label: 'Mês',
+                  value: selectedMonth,
+                  items: months.keys.toList(),
+                  itemLabel: (month) => months[month]!,
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => selectedMonth = value);
+                    }
+                  },
+                ),
+                _DashboardFilter<String>(
+                  label: 'Região',
+                  value: selectedRegion,
+                  items: regions,
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => selectedRegion = value);
+                    }
+                  },
+                ),
+                _DashboardFilter<String>(
+                  label: 'Tipo',
+                  value: selectedTumor,
+                  items: tumorTypes,
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => selectedTumor = value);
+                    }
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            if (!hasData) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7E8),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFF2D7A1)),
+                ),
+                child: Text(
+                  'Dados de ${months[selectedMonth]} de $selectedYear ainda não estão disponíveis para os filtros selecionados.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF805B16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isCompact = constraints.maxWidth < 620;
+                return Wrap(
+                  spacing: 16,
+                  runSpacing: 16,
+                  children: metricCards
+                      .map(
+                        (card) => SizedBox(
+                          width: isCompact
+                              ? constraints.maxWidth
+                              : (constraints.maxWidth - 32) / 3,
+                          child: card,
+                        ),
+                      )
+                      .toList(),
+                );
+              },
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7F9FC),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Evolução mensal',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF17323B),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        const _ChartLegendItem(
+                          label: 'Custo total mensal (SIA + SIH)',
+                          color: Color(0xFF0B7773),
+                        ),
+                        const SizedBox(height: 16),
+                        _BarChart(
+                          values: data.monthlyTrend,
+                          rawValues: data.monthlyValues,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: widget.isWide ? 280 : 240,
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7F9FC),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Como interpretar',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF17323B),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Valores administrativos aprovados/faturados. Não representam custo econômico nem, necessariamente, pagamento efetivo.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.5,
+                            color: Color(0xFF536170),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardFilter<T> extends StatelessWidget {
+  const _DashboardFilter({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    this.itemLabel,
+  });
+
+  final String label;
+  final T value;
+  final List<T> items;
+  final ValueChanged<T?> onChanged;
+  final String Function(T item)? itemLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F6F8),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          items: items
+              .map(
+                (item) => DropdownMenuItem<T>(
+                  value: item,
+                  child: Text(itemLabel?.call(item) ?? item.toString()),
+                ),
+              )
+              .toList(),
+          onChanged: onChanged,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF17323B),
+          ),
+          icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+          hint: Text(label),
+        ),
+      ),
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: color.withAlpha(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 12,
+              color: Color(0xFF536170),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 11,
+              height: 1.4,
+              color: Color(0xFF718091),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BarChart extends StatelessWidget {
+  const _BarChart({required this.values, required this.rawValues});
+
+  final List<double> values;
+  final List<double> rawValues;
+
+  static const _months = [
+    'JAN',
+    'FEV',
+    'MAR',
+    'ABR',
+    'MAI',
+    'JUN',
+    'JUL',
+    'AGO',
+    'SET',
+    'OUT',
+    'NOV',
+    'DEZ',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 174,
+      child: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: List.generate(
+                      4,
+                      (_) =>
+                          Container(height: 1, color: const Color(0xFFE4EAF0)),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: List.generate(values.length, (index) {
+                      final value = values[index].clamp(0.0, 1.0).toDouble();
+                      final monthValue = rawValues[index];
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 7),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              return Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Tooltip(
+                                  message:
+                                      '${_months[index]}: ${OncologyCostData._formatCurrency(monthValue)}',
+                                  preferBelow: false,
+                                  verticalOffset: 8,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF17323B),
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x1A17323B),
+                                        blurRadius: 12,
+                                        offset: Offset(0, 8),
+                                      ),
+                                    ],
+                                  ),
+                                  textStyle: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  child: TweenAnimationBuilder<double>(
+                                    tween: Tween(begin: 0, end: value),
+                                    duration: Duration(
+                                      milliseconds: 450 + index * 70,
+                                    ),
+                                    curve: Curves.easeOutCubic,
+                                    builder: (context, animatedValue, _) {
+                                      return Semantics(
+                                        label:
+                                            '${_months[index]}, índice mensal ${(value * 100).round()}',
+                                        child: Container(
+                                          width: double.infinity,
+                                          height:
+                                              constraints.maxHeight *
+                                              animatedValue,
+                                          decoration: BoxDecoration(
+                                            gradient: const LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: [
+                                                Color(0xFF25A59E),
+                                                Color(0xFF0B7773),
+                                              ],
+                                            ),
+                                            borderRadius:
+                                                const BorderRadius.vertical(
+                                                  top: Radius.circular(9),
+                                                ),
+                                            boxShadow: const [
+                                              BoxShadow(
+                                                color: Color(0x260B7773),
+                                                blurRadius: 8,
+                                                offset: Offset(0, 3),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: List.generate(
+              values.length,
+              (index) => Expanded(
+                child: Text(
+                  _months[index],
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF718091),
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartLegendItem extends StatelessWidget {
+  const _ChartLegendItem({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withAlpha(14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withAlpha(28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [const Color(0xFF25A59E), color],
+              ),
+              borderRadius: BorderRadius.circular(3),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withAlpha(35),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF536170),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1428,9 +2215,8 @@ class _AgendaEventCard extends StatelessWidget {
   Future<void> copyLink(BuildContext context, Uri link) async {
     await Clipboard.setData(ClipboardData(text: link.toString()));
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Link copiado.')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Link copiado.')));
     }
   }
 
