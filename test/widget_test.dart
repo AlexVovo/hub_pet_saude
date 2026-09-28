@@ -21,16 +21,15 @@ void main() {
     expect(find.textContaining('Tudo do Conecta Onco'), findsOneWidget);
   });
 
-  testWidgets('shows the oncology dashboard screen', (
+  testWidgets('keeps the oncology dashboard hidden and the hub available', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const PetSaudeApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('Oncologia geral | custos SIA/SIH'), findsOneWidget);
-    expect(find.text('Custo total em oncologia geral'), findsOneWidget);
-    expect(find.text('Custos SIA'), findsOneWidget);
-    expect(find.text('Custo total mensal (SIA + SIH)'), findsOneWidget);
+    expect(find.text('Oncologia geral | custos SIA/SIH'), findsNothing);
+    expect(find.text('Apresentações'), findsOneWidget);
+    expect(find.text('Artigos'), findsOneWidget);
   });
 
   testWidgets('shows a tooltip with the monthly value on hover', (

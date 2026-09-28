@@ -11,6 +11,9 @@ import 'firebase_options.dart';
 const driveRoot =
     'https://drive.google.com/drive/folders/1f5g51F-XQrpLIUj7WFDQE8n7WguwCzgb';
 
+// Mantém o painel preservado no código enquanto sua exibição está congelada.
+const oncologyDashboardEnabled = false;
+
 const agendaEditorEmails = {
   'a.avila.bioinfo@ici.ong', // ADM do sistema
   //'projetobioinfo@ici.ong',
@@ -513,9 +516,10 @@ class _HubHomePageState extends State<HubHomePage> {
                       ),
                     ),
                     SliverToBoxAdapter(child: _WelcomeSection(isWide: isWide)),
-                    SliverToBoxAdapter(
-                      child: OncologyDashboardSection(isWide: isWide),
-                    ),
+                    if (oncologyDashboardEnabled)
+                      SliverToBoxAdapter(
+                        child: OncologyDashboardSection(isWide: isWide),
+                      ),
                     SliverToBoxAdapter(
                       child: _Toolbar(
                         selectedCategory: selectedCategory,
